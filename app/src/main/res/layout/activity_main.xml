@@ -2,16 +2,17 @@
     xmlns:tools="http://schemas.android.com/tools" android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".MainActivity">
-
-    <WebView
-        android:id="@+id/activity_main_webview"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+    
     <com.google.android.gms.ads.AdView
     android:id="@+id/adView"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     ads:adSize="BANNER"
     ads:adUnitId="ca-app-pub-2344867686796379/6248722226"/>
+
+    <WebView
+        android:id="@+id/activity_main_webview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
 </RelativeLayout>
