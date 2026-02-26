@@ -1,4 +1,4 @@
-name: Build DailyHubKE APK
+name: Build Signed APK
 
 on:
   push:
@@ -8,36 +8,34 @@ on:
 
 jobs:
   build:
-    name: Build Release APK
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1 — Checkout the repo
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Step 2 — Install Java 17
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 17
+          distribution: 'temurin'
+          java-version: '17'
 
-      # Step 3 — Make Gradle wrapper executable
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
-      # Step 4 — Make gradle-wrapper.jar executable (safe step)
-      - name: Make gradle-wrapper.jar executable
-        run: chmod +x ./gradle/wrapper/gradle-wrapper.jar || true
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release-key.jks
 
-      # Step 5 — Build the release APK
       - name: Build Release APK
         run: ./gradlew assembleRelease
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      # Step 6 — Upload APK as artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DailyHubKE-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: app-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
