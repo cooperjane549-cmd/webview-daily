@@ -1,18 +1,22 @@
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools" android:layout_width="match_parent"
+    xmlns:tools="http://schemas.android.com/tools"
+    xmlns:ads="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".MainActivity">
-    
+
     <com.google.android.gms.ads.AdView
-    android:id="@+id/adView"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    ads:adSize="BANNER"
-    ads:adUnitId="ca-app-pub-2344867686796379/6248722226"/>
+        android:id="@+id/adView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        ads:adSize="BANNER"
+        ads:adUnitId="ca-app-pub-2344867686796379/6248722226" />
 
     <WebView
         android:id="@+id/activity_main_webview"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:layout_below="@id/adView" />
 
 </RelativeLayout>
+    
