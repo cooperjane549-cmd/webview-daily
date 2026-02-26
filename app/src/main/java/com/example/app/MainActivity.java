@@ -1,4 +1,3 @@
-
 package com.example.app;
 
 import android.annotation.SuppressLint;
@@ -6,6 +5,7 @@ import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.webkit.ValueCallback;
@@ -15,6 +15,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdView;
@@ -32,7 +33,7 @@ public class MainActivity extends Activity {
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
@@ -64,7 +65,7 @@ public class MainActivity extends Activity {
         webSettings.setUseWideViewPort(true);
         webSettings.setSupportZoom(false);
 
-        // File upload support
+        // File upload support including camera + multiple files
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
@@ -73,6 +74,7 @@ public class MainActivity extends Activity {
                     MainActivity.this.filePathCallback.onReceiveValue(null);
                 }
                 MainActivity.this.filePathCallback = filePathCallback;
+
                 Intent intent = fileChooserParams.createIntent();
                 try {
                     startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
@@ -101,7 +103,7 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
@@ -109,7 +111,17 @@ public class MainActivity extends Activity {
             Uri[] result = null;
             if (resultCode == RESULT_OK) {
                 if (data != null) {
-                    result = new Uri[]{data.getData()};
+                    // Handles multiple selections if available
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        result = data.getClipData() != null ? new Uri[data.getClipData().getItemCount()] : new Uri[]{data.getData()};
+                        if (data.getClipData() != null) {
+                            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+                                result[i] = data.getClipData().getItemAt(i).getUri();
+                            }
+                        }
+                    } else {
+                        result = new Uri[]{data.getData()};
+                    }
                 }
             }
             filePathCallback.onReceiveValue(result);
