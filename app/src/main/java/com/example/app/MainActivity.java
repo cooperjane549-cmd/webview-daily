@@ -24,7 +24,7 @@ public class MainActivity extends Activity {
          mWebView.loadUrl("https://dailyhubke.com");
 
         // LOCAL RESOURCE
-         mWebView.loadUrl("file:///android_asset/index.html");
+         mWebView.loadUrl("https://dailyhubke.com");
     }
 
     @Override
