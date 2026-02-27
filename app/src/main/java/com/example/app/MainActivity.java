@@ -4,7 +4,6 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -32,7 +31,6 @@ public class MainActivity extends Activity {
     private WebView mWebView;
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1;
-    private static final int PERMISSION_REQUEST_CODE = 100;
     private InterstitialAd mInterstitialAd;
     private AdView mBannerAd;
 
@@ -45,11 +43,11 @@ public class MainActivity extends Activity {
         // Initialize AdMob
         MobileAds.initialize(this, initializationStatus -> {});
 
-        // Banner
+        // Banner Ad
         mBannerAd = findViewById(R.id.adView);
         mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // Interstitial
+        // Interstitial Ad
         InterstitialAd.load(this,
                 "ca-app-pub-2344867686796379/4612206920",
                 new AdRequest.Builder().build(),
@@ -70,14 +68,13 @@ public class MainActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(false);
 
-        // 🔥 FIXED WebViewClient (THIS SOLVES YOUR ERROR)
+        // WebViewClient to handle links safely
         mWebView.setWebViewClient(new WebViewClient() {
-
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
 
-                // 1️⃣ BLOCK Monetag domain completely
+                // 1️⃣ Block Monetag
                 if (url.contains("amskiploomr.com")) {
                     return true;
                 }
@@ -88,18 +85,14 @@ public class MainActivity extends Activity {
                         Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
                         startActivity(intent);
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        // Fail silently
                     }
                     return true;
                 }
 
-                // 3️⃣ Handle tel:, mailto:, market:
-                if (url.startsWith("tel:") ||
-                        url.startsWith("mailto:") ||
-                        url.startsWith("market:")) {
-
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                    startActivity(intent);
+                // 3️⃣ tel:, mailto:, market:
+                if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("market:")) {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                     return true;
                 }
 
@@ -110,88 +103,55 @@ public class MainActivity extends Activity {
         // File upload
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public boolean onShowFileChooser(WebView webView,
-                                             ValueCallback<Uri[]> filePathCallback,
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
                                              FileChooserParams fileChooserParams) {
-
                 if (MainActivity.this.filePathCallback != null) {
                     MainActivity.this.filePathCallback.onReceiveValue(null);
                 }
-
                 MainActivity.this.filePathCallback = filePathCallback;
-
                 try {
-                    Intent intent = fileChooserParams.createIntent();
-                    startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
+                    startActivityForResult(fileChooserParams.createIntent(), FILE_CHOOSER_REQUEST_CODE);
                 } catch (Exception e) {
                     MainActivity.this.filePathCallback = null;
                     return false;
                 }
-
                 return true;
             }
         });
 
-        // 🔥 FIXED Download (no permission drama on Android 10+)
+        // Download PDFs/files via browser
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            request.setNotificationVisibility(
-                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-
-            String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                request.setDestinationInExternalFilesDir(
-                        MainActivity.this,
-                        Environment.DIRECTORY_DOWNLOADS,
-                        fileName
-                );
-            } else {
-                request.setDestinationInExternalPublicDir(
-                        Environment.DIRECTORY_DOWNLOADS,
-                        fileName
-                );
+            try {
+                Intent browserIntent = new Intent(Intent.ACTION_VIEW);
+                browserIntent.setData(Uri.parse(url));
+                startActivity(browserIntent);
+                Toast.makeText(this, "Downloading in browser...", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "Cannot download file.", Toast.LENGTH_SHORT).show();
             }
-
-            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            dm.enqueue(request);
-
-            Toast.makeText(MainActivity.this,
-                    "Download started: " + fileName,
-                    Toast.LENGTH_SHORT).show();
         });
 
+        // Load the main web app
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
-
             if (filePathCallback == null) return;
-
             Uri[] result = null;
-
             if (resultCode == RESULT_OK && data != null) {
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
-                        data.getClipData() != null) {
-
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && data.getClipData() != null) {
                     int count = data.getClipData().getItemCount();
                     result = new Uri[count];
-
                     for (int i = 0; i < count; i++) {
                         result[i] = data.getClipData().getItemAt(i).getUri();
                     }
-
                 } else {
                     result = new Uri[]{data.getData()};
                 }
             }
-
             filePathCallback.onReceiveValue(result);
             filePathCallback = null;
         }
