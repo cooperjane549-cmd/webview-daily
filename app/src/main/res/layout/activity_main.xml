@@ -5,7 +5,6 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
-    <!-- Banner Ad at the top -->
     <com.google.android.gms.ads.AdView
         android:id="@+id/adView"
         android:layout_width="match_parent"
@@ -14,10 +13,20 @@
         ads:adUnitId="ca-app-pub-2344867686796379/6248722226"
         android:layout_alignParentTop="true" />
 
-    <!-- WebView below the banner -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:layout_below="@id/adView"
+        android:progressDrawable="@android:color/holo_green_dark"
+        android:visibility="gone"
+        android:elevation="5dp"/>
+
     <WebView
         android:id="@+id/activity_main_webview"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_below="@id/adView" />
+        android:layout_below="@id/progressBar" />
+
 </RelativeLayout>
