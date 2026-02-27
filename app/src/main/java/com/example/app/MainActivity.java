@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -14,6 +15,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -29,6 +31,7 @@ public class MainActivity extends Activity {
     private WebView mWebView;
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1;
+    private static final int PERMISSION_REQUEST_CODE = 100;
     private InterstitialAd mInterstitialAd;
     private AdView mBannerAd;
 
@@ -37,6 +40,13 @@ public class MainActivity extends Activity {
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        // Request runtime storage permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_CODE);
+            }
+        }
 
         // Initialize AdMob
         MobileAds.initialize(this, initializationStatus -> {});
@@ -65,9 +75,6 @@ public class MainActivity extends Activity {
         webSettings.setLoadWithOverviewMode(true);
         webSettings.setUseWideViewPort(true);
         webSettings.setSupportZoom(false);
-        webSettings.setAllowFileAccess(true);
-        webSettings.setAllowContentAccess(true);
-        webSettings.setSupportMultipleWindows(true);
 
         // File upload support including camera + multiple files
         mWebView.setWebChromeClient(new WebChromeClient() {
@@ -90,45 +97,34 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Download support
+        // Download support (PDFs, documents, etc.)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
+            // Check permission first
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(MainActivity.this, "Storage permission denied. Cannot download file.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            request.allowScanningByMediaScanner();
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,
-                    URLUtil.guessFileName(url, contentDisposition, mimeType));
+
+            String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Scoped storage for Android 10+
+                request.setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, fileName);
+            } else {
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+            }
+
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             dm.enqueue(request);
+            Toast.makeText(MainActivity.this, "Download started: " + fileName, Toast.LENGTH_SHORT).show();
         });
 
-        // Safe WebViewClient with Monetag blocked
-        mWebView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
-                String url = request.getUrl().toString();
-
-                // Block Monetag completely
-                if (url.contains("amskiploomr.com")) {
-                    return true; // ignore Monetag links
-                }
-
-                // Handle normal HTTP/S URLs inside WebView
-                if (url.startsWith("http://") || url.startsWith("https://")) {
-                    return false;
-                }
-
-                // Open external apps / unknown schemes safely
-                try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                    startActivity(intent);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-                return true;
-            }
-        });
-
-        // Load DailyHubKE web app
+        // Normal web browsing inside WebView
+        mWebView.setWebViewClient(new WebViewClient());
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
@@ -164,6 +160,16 @@ public class MainActivity extends Activity {
             mWebView.goBack();
         } else {
             super.onBackPressed();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Permission denied. Cannot download files.", Toast.LENGTH_SHORT).show();
+            }
         }
     }
 }
