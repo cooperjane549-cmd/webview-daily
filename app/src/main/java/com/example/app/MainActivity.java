@@ -20,14 +20,15 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.ads.AdRequest;
 import com.google.android.gms.ads.AdView;
 import com.google.android.gms.ads.MobileAds;
 import com.google.android.gms.ads.interstitial.InterstitialAd;
 import com.google.android.gms.ads.interstitial.InterstitialAdLoadCallback;
+
+import java.io.File;
+import java.io.FileOutputStream;
 
 public class MainActivity extends Activity {
 
@@ -38,7 +39,7 @@ public class MainActivity extends Activity {
     private InterstitialAd mInterstitialAd;
     private AdView mBannerAd;
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -47,11 +48,11 @@ public class MainActivity extends Activity {
         // Initialize AdMob
         MobileAds.initialize(this, initializationStatus -> {});
 
-        // Banner Ad
+        // Banner
         mBannerAd = findViewById(R.id.adView);
         mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // Interstitial Ad
+        // Interstitial
         InterstitialAd.load(this,
                 "ca-app-pub-2344867686796379/4612206920",
                 new AdRequest.Builder().build(),
@@ -72,25 +73,40 @@ public class MainActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(false);
 
-        // WebViewClient to handle special URLs & block Monetag
+        // Add JS interface for Blob downloads
+        mWebView.addJavascriptInterface(new Object() {
+            @android.webkit.JavascriptInterface
+            public void downloadFile(String base64Data, String fileName) {
+                try {
+                    byte[] data = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT);
+                    File path = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName);
+                    FileOutputStream fos = new FileOutputStream(path);
+                    fos.write(data);
+                    fos.close();
+
+                    Toast.makeText(MainActivity.this, "Downloaded: " + fileName, Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Toast.makeText(MainActivity.this, "Download failed", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }, "AndroidDownloader");
+
+        // WebViewClient
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
 
-                // Block Monetag completely
-                if (url.contains("amskiploomr.com")) {
-                    return true;
-                }
+                // Block Monetag
+                if (url.contains("amskiploomr.com")) return true;
 
-                // Handle intent:// safely
+                // Handle intent:// links
                 if (url.startsWith("intent://")) {
                     try {
                         Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
                         startActivity(intent);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
+                    } catch (Exception e) { e.printStackTrace(); }
                     return true;
                 }
 
@@ -101,20 +117,49 @@ public class MainActivity extends Activity {
                     return true;
                 }
 
-                return false; // normal URLs
+                return false; // Allow normal URLs
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+
+                // Inject JS to handle Blob downloads
+                String js = "javascript:(function() {" +
+                        "var links = document.querySelectorAll('a');" +
+                        "for(var i=0;i<links.length;i++){" +
+                        " links[i].addEventListener('click',function(e){" +
+                        "  if(this.href.startsWith('blob:')){" +
+                        "   e.preventDefault();" +
+                        "   var xhr = new XMLHttpRequest();" +
+                        "   xhr.open('GET',this.href,true);" +
+                        "   xhr.responseType='blob';" +
+                        "   xhr.onload=function(){" +
+                        "    var reader=new FileReader();" +
+                        "    reader.onloadend=function(){" +
+                        "     var base64=reader.result.split(',')[1];" +
+                        "     AndroidDownloader.downloadFile(base64,'invoice.pdf');" +
+                        "    };" +
+                        "    reader.readAsDataURL(xhr.response);" +
+                        "   };" +
+                        "   xhr.send();" +
+                        "  }" +
+                        " });" +
+                        "}" +
+                        "})()";
+
+                view.evaluateJavascript(js, null);
             }
         });
 
-        // File upload
+        // WebChromeClient for file upload
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView webView,
                                              ValueCallback<Uri[]> filePathCallback,
                                              FileChooserParams fileChooserParams) {
-
-                if (MainActivity.this.filePathCallback != null) {
+                if (MainActivity.this.filePathCallback != null)
                     MainActivity.this.filePathCallback.onReceiveValue(null);
-                }
 
                 MainActivity.this.filePathCallback = filePathCallback;
 
@@ -130,37 +175,28 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Download support (PDFs, docs)
+        // Normal HTTP/HTTPS download (non-blob)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-
-            // Request permission on Android < 10
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-                    ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this,
-                        new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                        PERMISSION_REQUEST_CODE);
-                Toast.makeText(this, "Please allow storage permission to download files", Toast.LENGTH_SHORT).show();
-                return;
-            }
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
 
             String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url))
-                    .setTitle(fileName)
-                    .setDescription("Downloading file...")
-                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .setMimeType(mimeType);
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Scoped storage (Android 10+)
-                request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName);
+                request.setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, fileName);
             } else {
+                if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_CODE);
+                    Toast.makeText(MainActivity.this, "Please allow storage permission to download files", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
             }
 
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             dm.enqueue(request);
 
-            Toast.makeText(this, "Download started: " + fileName, Toast.LENGTH_SHORT).show();
+            Toast.makeText(MainActivity.this, "Download started: " + fileName, Toast.LENGTH_SHORT).show();
         });
 
         // Load main URL
@@ -172,22 +208,16 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
 
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
-
             if (filePathCallback == null) return;
 
             Uri[] result = null;
-
             if (resultCode == RESULT_OK && data != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
-                        data.getClipData() != null) {
-
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && data.getClipData() != null) {
                     int count = data.getClipData().getItemCount();
                     result = new Uri[count];
-
                     for (int i = 0; i < count; i++) {
                         result[i] = data.getClipData().getItemAt(i).getUri();
                     }
-
                 } else {
                     result = new Uri[]{data.getData()};
                 }
@@ -200,22 +230,17 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (mWebView.canGoBack()) {
-            mWebView.goBack();
-        } else {
-            super.onBackPressed();
-        }
+        if (mWebView.canGoBack()) mWebView.goBack();
+        else super.onBackPressed();
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+            if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED)
                 Toast.makeText(this, "Permission denied. Cannot download files.", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "Permission granted! You can now download files.", Toast.LENGTH_SHORT).show();
-            }
+            else Toast.makeText(this, "Permission granted! You can now download files.", Toast.LENGTH_SHORT).show();
         }
     }
 }
