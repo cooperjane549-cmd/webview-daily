@@ -41,13 +41,6 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Request runtime storage permission
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_CODE);
-            }
-        }
-
         // Initialize AdMob
         MobileAds.initialize(this, initializationStatus -> {});
 
@@ -76,7 +69,7 @@ public class MainActivity extends Activity {
         webSettings.setUseWideViewPort(true);
         webSettings.setSupportZoom(false);
 
-        // File upload support including camera + multiple files
+        // File upload support
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
@@ -97,24 +90,22 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Download support (PDFs, documents, etc.)
+        // File download support (PDFs, documents)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-            // Check permission first
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(MainActivity.this, "Storage permission denied. Cannot download file.", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-
             String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Scoped storage for Android 10+
+                // Android 10+ scoped storage, no permission needed
                 request.setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, fileName);
             } else {
+                // Android 9 and below require WRITE_EXTERNAL_STORAGE
+                if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_CODE);
+                    Toast.makeText(MainActivity.this, "Please allow storage permission to download files", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
             }
 
@@ -123,7 +114,7 @@ public class MainActivity extends Activity {
             Toast.makeText(MainActivity.this, "Download started: " + fileName, Toast.LENGTH_SHORT).show();
         });
 
-        // Normal web browsing inside WebView
+        // Normal WebView browsing
         mWebView.setWebViewClient(new WebViewClient());
         mWebView.loadUrl("https://dailyhubke.com");
     }
@@ -169,7 +160,9 @@ public class MainActivity extends Activity {
         if (requestCode == PERMISSION_REQUEST_CODE) {
             if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, "Permission denied. Cannot download files.", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Permission granted! You can now download files.", Toast.LENGTH_SHORT).show();
             }
         }
     }
-}
+                                             }
