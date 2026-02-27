@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -44,78 +45,123 @@ public class MainActivity extends Activity {
         // Initialize AdMob
         MobileAds.initialize(this, initializationStatus -> {});
 
-        // Banner Ad
+        // Banner
         mBannerAd = findViewById(R.id.adView);
-        AdRequest adRequest = new AdRequest.Builder().build();
-        mBannerAd.loadAd(adRequest);
+        mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // Interstitial Ad
-        InterstitialAd.load(this, "ca-app-pub-2344867686796379/4612206920",
+        // Interstitial
+        InterstitialAd.load(this,
+                "ca-app-pub-2344867686796379/4612206920",
                 new AdRequest.Builder().build(),
                 new InterstitialAdLoadCallback() {
                     @Override
-                    public void onAdLoaded(@NonNull InterstitialAd interstitialAd) {
-                        mInterstitialAd = interstitialAd;
+                    public void onAdLoaded(@NonNull InterstitialAd ad) {
+                        mInterstitialAd = ad;
                         mInterstitialAd.show(MainActivity.this);
                     }
                 });
 
-        // Setup WebView
+        // WebView setup
         mWebView = findViewById(R.id.activity_main_webview);
-        WebSettings webSettings = mWebView.getSettings();
-        webSettings.setJavaScriptEnabled(true);
-        webSettings.setDomStorageEnabled(true);
-        webSettings.setLoadWithOverviewMode(true);
-        webSettings.setUseWideViewPort(true);
-        webSettings.setSupportZoom(false);
+        WebSettings settings = mWebView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(true);
+        settings.setSupportZoom(false);
 
-        // File upload support
+        // 🔥 FIXED WebViewClient (THIS SOLVES YOUR ERROR)
+        mWebView.setWebViewClient(new WebViewClient() {
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+
+                // 1️⃣ BLOCK Monetag domain completely
+                if (url.contains("amskiploomr.com")) {
+                    return true;
+                }
+
+                // 2️⃣ Handle intent:// safely
+                if (url.startsWith("intent://")) {
+                    try {
+                        Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+                        startActivity(intent);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    return true;
+                }
+
+                // 3️⃣ Handle tel:, mailto:, market:
+                if (url.startsWith("tel:") ||
+                        url.startsWith("mailto:") ||
+                        url.startsWith("market:")) {
+
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    startActivity(intent);
+                    return true;
+                }
+
+                return false; // Allow normal URLs
+            }
+        });
+
+        // File upload
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
+            public boolean onShowFileChooser(WebView webView,
+                                             ValueCallback<Uri[]> filePathCallback,
                                              FileChooserParams fileChooserParams) {
+
                 if (MainActivity.this.filePathCallback != null) {
                     MainActivity.this.filePathCallback.onReceiveValue(null);
                 }
+
                 MainActivity.this.filePathCallback = filePathCallback;
 
-                Intent intent = fileChooserParams.createIntent();
                 try {
+                    Intent intent = fileChooserParams.createIntent();
                     startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
                 } catch (Exception e) {
                     MainActivity.this.filePathCallback = null;
                     return false;
                 }
+
                 return true;
             }
         });
 
-        // File download support (PDFs, documents)
+        // 🔥 FIXED Download (no permission drama on Android 10+)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
+
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+
             String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+ scoped storage, no permission needed
-                request.setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, fileName);
+                request.setDestinationInExternalFilesDir(
+                        MainActivity.this,
+                        Environment.DIRECTORY_DOWNLOADS,
+                        fileName
+                );
             } else {
-                // Android 9 and below require WRITE_EXTERNAL_STORAGE
-                if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_CODE);
-                    Toast.makeText(MainActivity.this, "Please allow storage permission to download files", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                request.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOWNLOADS,
+                        fileName
+                );
             }
 
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             dm.enqueue(request);
-            Toast.makeText(MainActivity.this, "Download started: " + fileName, Toast.LENGTH_SHORT).show();
+
+            Toast.makeText(MainActivity.this,
+                    "Download started: " + fileName,
+                    Toast.LENGTH_SHORT).show();
         });
 
-        // Normal WebView browsing
-        mWebView.setWebViewClient(new WebViewClient());
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
@@ -124,22 +170,28 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
 
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+
             if (filePathCallback == null) return;
+
             Uri[] result = null;
-            if (resultCode == RESULT_OK) {
-                if (data != null) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        result = data.getClipData() != null ? new Uri[data.getClipData().getItemCount()] : new Uri[]{data.getData()};
-                        if (data.getClipData() != null) {
-                            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
-                                result[i] = data.getClipData().getItemAt(i).getUri();
-                            }
-                        }
-                    } else {
-                        result = new Uri[]{data.getData()};
+
+            if (resultCode == RESULT_OK && data != null) {
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
+                        data.getClipData() != null) {
+
+                    int count = data.getClipData().getItemCount();
+                    result = new Uri[count];
+
+                    for (int i = 0; i < count; i++) {
+                        result[i] = data.getClipData().getItemAt(i).getUri();
                     }
+
+                } else {
+                    result = new Uri[]{data.getData()};
                 }
             }
+
             filePathCallback.onReceiveValue(result);
             filePathCallback = null;
         }
@@ -153,16 +205,4 @@ public class MainActivity extends Activity {
             super.onBackPressed();
         }
     }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Permission denied. Cannot download files.", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "Permission granted! You can now download files.", Toast.LENGTH_SHORT).show();
-            }
-        }
-    }
-                                             }
+}
