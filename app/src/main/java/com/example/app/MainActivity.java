@@ -14,6 +14,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -64,6 +65,9 @@ public class MainActivity extends Activity {
         webSettings.setLoadWithOverviewMode(true);
         webSettings.setUseWideViewPort(true);
         webSettings.setSupportZoom(false);
+        webSettings.setAllowFileAccess(true);
+        webSettings.setAllowContentAccess(true);
+        webSettings.setSupportMultipleWindows(true);
 
         // File upload support including camera + multiple files
         mWebView.setWebChromeClient(new WebChromeClient() {
@@ -97,8 +101,34 @@ public class MainActivity extends Activity {
             dm.enqueue(request);
         });
 
-        // Normal web browsing inside WebView
-        mWebView.setWebViewClient(new WebViewClient());
+        // Safe WebViewClient with Monetag blocked
+        mWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                String url = request.getUrl().toString();
+
+                // Block Monetag completely
+                if (url.contains("amskiploomr.com")) {
+                    return true; // ignore Monetag links
+                }
+
+                // Handle normal HTTP/S URLs inside WebView
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    return false;
+                }
+
+                // Open external apps / unknown schemes safely
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    startActivity(intent);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                return true;
+            }
+        });
+
+        // Load DailyHubKE web app
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
@@ -111,7 +141,6 @@ public class MainActivity extends Activity {
             Uri[] result = null;
             if (resultCode == RESULT_OK) {
                 if (data != null) {
-                    // Handles multiple selections if available
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                         result = data.getClipData() != null ? new Uri[data.getClipData().getItemCount()] : new Uri[]{data.getData()};
                         if (data.getClipData() != null) {
