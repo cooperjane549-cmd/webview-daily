@@ -43,10 +43,14 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Ads Initialization
+        // 1. Initialize AdMob (Banner & Interstitial)
         MobileAds.initialize(this, initializationStatus -> {});
+        
         AdView mBannerAd = findViewById(R.id.adView);
-        if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
+        if (mBannerAd != null) {
+            mBannerAd.loadAd(new AdRequest.Builder().build());
+        }
+
         loadInterstitial();
 
         // 2. WebView Core Configuration
@@ -58,30 +62,29 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setDatabaseEnabled(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setSupportMultipleWindows(true); // Enabled to catch pop-up tools
+        settings.setSupportMultipleWindows(true); 
 
-        // 3. The "Everything" Downloader Interface
+        // 3. The Download Bridge (Blob & Base64)
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
-            public void downloadBlob(String base64Data, String fileName, String mimeType) {
-                // If the site doesn't name the file, we name it by timestamp
+            public void downloadBlob(String base64Data, String fileName) {
                 String finalName = (fileName == null || fileName.isEmpty() || fileName.equals("undefined")) 
                                    ? "DailyHub_" + System.currentTimeMillis() + ".pdf" 
                                    : fileName;
-                saveBlobToDownloads(base64Data, finalName, mimeType);
+                saveFileToPublicDownloads(base64Data, finalName);
             }
         }, "AndroidDownloader");
 
-        // 4. Client to handle URL logic
+        // 4. Client to handle Redirects and Ad-Blocking
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 
-                // Block Adsense/Redirect loops if necessary
+                // Block specific ad domains if needed
                 if (url.contains("amskiploomr.com")) return true;
 
-                // Handle system intents (Phone, Email, Play Store)
+                // Handle external links (WhatsApp, Email, Phone)
                 if (!url.startsWith("http")) {
                     try {
                         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
@@ -94,13 +97,27 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectUniversalDownloader();
+                injectDownloadScripts();
             }
         });
 
-        // 5. Chrome Client for File Uploads and New Windows
+        // 5. Chrome Client for File Uploads and New Window Popups
         mWebView.setWebChromeClient(new WebChromeClient() {
-            // This handles tools that try to open a new tab for the PDF
+            // File Upload Support (Merge PDF / Scan to PDF)
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams params) {
+                MainActivity.this.filePathCallback = filePathCallback;
+                Intent intent = params.createIntent();
+                try {
+                    startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
+                } catch (Exception e) {
+                    MainActivity.this.filePathCallback = null;
+                    return false;
+                }
+                return true;
+            }
+
+            // Handles tools that open PDFs in new tabs
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, android.os.Message resultMsg) {
                 WebView newWebView = new WebView(MainActivity.this);
@@ -116,18 +133,9 @@ public class MainActivity extends Activity {
                 resultMsg.sendToTarget();
                 return true;
             }
-
-            // This handles the "Merge PDF" or "Scan to PDF" file uploads
-            @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams params) {
-                MainActivity.this.filePathCallback = filePathCallback;
-                Intent intent = params.createIntent();
-                startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
-                return true;
-            }
         });
 
-        // 6. Handle standard (non-blob) downloads
+        // 6. Handle Standard HTTP Downloads
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
             handleStandardDownload(url, contentDisposition, mimeType);
         });
@@ -135,60 +143,53 @@ public class MainActivity extends Activity {
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
-    // --- LOGIC: The Universal Blob Interceptor ---
-    private void injectUniversalDownloader() {
+    // --- HELPER: JavaScript Injection for Blobs ---
+    private void injectDownloadScripts() {
         String js = "javascript:(function() {" +
-                "  function processBlob(url, fileName) {" +
-                "    var xhr = new XMLHttpRequest();" +
-                "    xhr.open('GET', url, true);" +
-                "    xhr.responseType = 'blob';" +
-                "    xhr.onload = function() {" +
-                "      var reader = new FileReader();" +
-                "      reader.onloadend = function() {" +
-                "        var base64 = reader.result.split(',')[1];" +
-                "        AndroidDownloader.downloadBlob(base64, fileName || 'document.pdf', 'application/pdf');" +
-                "      };" +
-                "      reader.readAsDataURL(xhr.response);" +
-                "    };" +
-                "    xhr.send();" +
-                "  }" +
-                // Catch clicks on download buttons
-                "  window.onclick = function(e) {" +
-                "    var link = e.target.closest('a');" +
-                "    if(link && link.href.startsWith('blob:')) {" +
-                "      e.preventDefault();" +
-                "      processBlob(link.href, link.download);" +
+                "  var originalCreate = URL.createObjectURL;" +
+                "  URL.createObjectURL = function(blob) {" +
+                "    var url = originalCreate.call(URL, blob);" +
+                "    if(blob.type === 'application/pdf') {" +
+                "       var reader = new FileReader();" +
+                "       reader.onloadend = function() {" +
+                "         AndroidDownloader.downloadBlob(reader.result.split(',')[1], 'DailyHub_Document.pdf');" +
+                "       };" +
+                "       reader.readAsDataURL(blob);" +
                 "    }" +
+                "    return url;" +
                 "  };" +
-                // Catch tools that use window.open()
-                "  var oldOpen = window.open;" +
-                "  window.open = function(url, name, specs) {" +
-                "    if(url && url.startsWith('blob:')) {" +
-                "      processBlob(url, 'document.pdf');" +
-                "      return null;" +
+                "  window.onclick = function(e) {" +
+                "    var a = e.target.closest('a');" +
+                "    if(a && a.href.startsWith('blob:')) {" +
+                "      e.preventDefault();" +
+                "      var xhr = new XMLHttpRequest();" +
+                "      xhr.open('GET', a.href, true);" +
+                "      xhr.responseType = 'blob';" +
+                "      xhr.onload = function() {" +
+                "        var r = new FileReader();" +
+                "        r.onloadend = function() { AndroidDownloader.downloadBlob(r.result.split(',')[1], a.download); };" +
+                "        r.readAsDataURL(xhr.response);" +
+                "      };" +
+                "      xhr.send();" +
                 "    }" +
-                "    return oldOpen(url, name, specs);" +
                 "  };" +
                 "})()";
         mWebView.evaluateJavascript(js, null);
     }
 
-    private void saveBlobToDownloads(String base64, String name, String mime) {
+    // --- HELPER: Save to Public Downloads ---
+    private void saveFileToPublicDownloads(String base64, String name) {
         try {
-            byte[] bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
+            byte[] data = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
             File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
+            try (OutputStream os = new FileOutputStream(path)) { os.write(data); }
             
-            try (OutputStream os = new FileOutputStream(path)) {
-                os.write(bytes);
-            }
-
-            // Trigger system notification
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            dm.addCompletedDownload(name, "Matcha Download", true, mime, path.getAbsolutePath(), bytes.length, true);
-
-            runOnUiThread(() -> Toast.makeText(this, "Saved to Downloads: " + name, Toast.LENGTH_LONG).show());
+            dm.addCompletedDownload(name, "DailyHub Document", true, "application/pdf", path.getAbsolutePath(), data.length, true);
+            
+            runOnUiThread(() -> Toast.makeText(this, "Downloaded to " + name, Toast.LENGTH_LONG).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Download error", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Download Failed", Toast.LENGTH_SHORT).show());
         }
     }
 
@@ -197,10 +198,9 @@ public class MainActivity extends Activity {
         String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
         request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
         request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-        
         DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
         dm.enqueue(request);
-        Toast.makeText(this, "Downloading file...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "Starting download...", Toast.LENGTH_SHORT).show();
     }
 
     private void loadInterstitial() {
