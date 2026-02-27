@@ -28,6 +28,14 @@ jobs:
       - name: Grant Gradle Executable
         run: chmod +x ./gradlew
 
+      # ✅ ADD THIS STEP
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.keystore_base64 }}" | base64 --decode > app/release-key.jks
+
+      - name: Clean Project
+        run: ./gradlew clean
+
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
