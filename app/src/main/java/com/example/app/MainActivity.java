@@ -47,11 +47,11 @@ public class MainActivity extends Activity {
         // Initialize AdMob
         MobileAds.initialize(this, initializationStatus -> {});
 
-        // Banner
+        // Banner Ad
         mBannerAd = findViewById(R.id.adView);
         mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // Interstitial
+        // Interstitial Ad
         InterstitialAd.load(this,
                 "ca-app-pub-2344867686796379/4612206920",
                 new AdRequest.Builder().build(),
@@ -72,14 +72,16 @@ public class MainActivity extends Activity {
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(false);
 
-        // WebViewClient to handle intent:// links and block monetag
+        // WebViewClient to handle special URLs & block Monetag
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
 
-                // Block Monetag
-                if (url.contains("amskiploomr.com")) return true;
+                // Block Monetag completely
+                if (url.contains("amskiploomr.com")) {
+                    return true;
+                }
 
                 // Handle intent:// safely
                 if (url.startsWith("intent://")) {
@@ -94,11 +96,12 @@ public class MainActivity extends Activity {
 
                 // Handle tel:, mailto:, market:
                 if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("market:")) {
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    startActivity(intent);
                     return true;
                 }
 
-                return false;
+                return false; // normal URLs
             }
         });
 
@@ -127,10 +130,10 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Download support (PDFs, documents)
+        // Download support (PDFs, docs)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
 
-            // Check storage permission for Android < 10
+            // Request permission on Android < 10
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
                     ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this,
@@ -145,14 +148,12 @@ public class MainActivity extends Activity {
                     .setTitle(fileName)
                     .setDescription("Downloading file...")
                     .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .setMimeType(mimeType)
-                    .allowScanningByMediaScanner();
+                    .setMimeType(mimeType);
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // Scoped storage (Android 10+)
                 request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName);
             } else {
-                // Legacy storage
                 request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
             }
 
@@ -162,7 +163,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Download started: " + fileName, Toast.LENGTH_SHORT).show();
         });
 
-        // Load URL
+        // Load main URL
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
@@ -171,19 +172,27 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
 
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+
             if (filePathCallback == null) return;
+
             Uri[] result = null;
+
             if (resultCode == RESULT_OK && data != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && data.getClipData() != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
+                        data.getClipData() != null) {
+
                     int count = data.getClipData().getItemCount();
                     result = new Uri[count];
+
                     for (int i = 0; i < count; i++) {
                         result[i] = data.getClipData().getItemAt(i).getUri();
                     }
+
                 } else {
                     result = new Uri[]{data.getData()};
                 }
             }
+
             filePathCallback.onReceiveValue(result);
             filePathCallback = null;
         }
@@ -191,20 +200,21 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (mWebView.canGoBack()) mWebView.goBack();
-        else super.onBackPressed();
+        if (mWebView.canGoBack()) {
+            mWebView.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Permission granted! You can download files.", Toast.LENGTH_SHORT).show();
-            } else {
+            if (grantResults.length > 0 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, "Permission denied. Cannot download files.", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Permission granted! You can now download files.", Toast.LENGTH_SHORT).show();
             }
         }
     }
