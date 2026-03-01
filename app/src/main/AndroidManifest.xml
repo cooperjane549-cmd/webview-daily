@@ -5,15 +5,23 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         tools:ignore="GoogleAppIndexingWarning">
 
-        <!-- ✅ REQUIRED FOR ADMOB -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-2344867686796379~2770827433"/>
@@ -21,7 +29,7 @@
         <activity
             android:name="com.example.app.MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize">
+            android:configChanges="orientation|screenSize|keyboardHidden">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -29,6 +37,16 @@
             </intent-filter>
 
         </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 </manifest>
