@@ -3,12 +3,10 @@ package com.example.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
-import android.content.ClipData;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
-import android.provider.MediaStore;
 import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -40,7 +38,9 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_REQUEST_CODE = 1;
+    
     private InterstitialAd mInterstitialAd;
+    private final String INTERSTITIAL_ID = "ca-app-pub-2344867686796379/4612206920";
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -48,33 +48,32 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize AdMob (App ID: ca-app-pub-2344867686796379~2770827433)
+        // 1. Initialize AdMob & Banner
         MobileAds.initialize(this, initializationStatus -> {});
-        
-        // Load Banner Ad
         AdView mBannerAd = findViewById(R.id.adView);
-        if (mBannerAd != null) {
-            mBannerAd.loadAd(new AdRequest.Builder().build());
-        }
-        
-        loadInterstitial(); // Load Interstitial for later
+        if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
+        loadInterstitial();
 
-        // 2. Setup WebView and Progress Bar
+        // 2. Setup WebView
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
-
         WebSettings settings = mWebView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " MatchaApp");
+        settings.setUserAgentString(settings.setUserAgentString() + " MatchaApp");
 
-        // 3. Javascript Bridge for Downloads
+        // 3. JS Bridge (The Bridge between Web Click and Android Ad/Download)
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
-            public void downloadBlob(String base64Data, String fileName) {
-                saveFileAndTriggerAd(base64Data, fileName != null ? fileName : "DailyHub_Doc.pdf");
+            public void downloadBlob(String base64, String name) {
+                saveFile(base64, name);
+            }
+
+            @JavascriptInterface
+            public void triggerAdOnly() {
+                runOnUiThread(() -> showAdIfReady());
             }
         }, "AndroidDownloader");
 
@@ -82,32 +81,29 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                // Block Monetag Ad Redirects
-                if (url.contains("amskiploomr.com") || url.contains("monetag")) return true;
+                if (url.contains("monetag") || url.contains("amskiploomr")) return true; // Block ad hijacks
                 return false;
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectStreamCatcher();
+                injectGlobalListener();
             }
         });
 
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
-            public void onProgressChanged(WebView view, int newProgress) {
-                progressBar.setVisibility(newProgress < 100 ? View.VISIBLE : View.GONE);
-                progressBar.setProgress(newProgress);
+            public void onProgressChanged(WebView v, int p) {
+                progressBar.setVisibility(p < 100 ? View.VISIBLE : View.GONE);
+                progressBar.setProgress(p);
             }
 
-            // ✅ FIXED: MULTI-FILE SUPPORT FOR MERGE TOOL
             @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams params) {
-                MainActivity.this.filePathCallback = filePathCallback;
-                Intent intent = params.createIntent();
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Allow 5+ files
-                intent.setType("application/pdf");
-                startActivityForResult(Intent.createChooser(intent, "Select PDF files"), FILE_CHOOSER_REQUEST_CODE);
+            public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
+                filePathCallback = f;
+                Intent intent = p.createIntent();
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Fix for Merge PDF
+                startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
         });
@@ -115,48 +111,37 @@ public class MainActivity extends Activity {
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
-    // ✅ FIXED: HANDLING THE UPLOAD ARRAY FOR THE MERGE TOOL
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == FILE_CHOOSER_REQUEST_CODE && filePathCallback != null) {
-            Uri[] results = null;
-            if (resultCode == RESULT_OK && data != null) {
-                if (data.getClipData() != null) { // Multiple files
-                    int count = data.getClipData().getItemCount();
-                    results = new Uri[count];
-                    for (int i = 0; i < count; i++) {
-                        results[i] = data.getClipData().getItemAt(i).getUri();
-                    }
-                } else if (data.getData() != null) { // Single file
-                    results = new Uri[]{data.getData()};
-                }
-            }
-            filePathCallback.onReceiveValue(results);
-            filePathCallback = null;
-        }
-    }
-
-    private void injectStreamCatcher() {
+    private void injectGlobalListener() {
         String js = "javascript:(function() {" +
-                "  function sendToJava(url, name) {" +
+                "  function startDownload(url, name) {" +
                 "    fetch(url).then(r => r.blob()).then(blob => {" +
                 "      var reader = new FileReader();" +
                 "      reader.onloadend = function() { AndroidDownloader.downloadBlob(reader.result.split(',')[1], name); };" +
                 "      reader.readAsDataURL(blob);" +
                 "    });" +
                 "  }" +
-                "  window.onclick = function(e) {" +
-                "    var a = e.target.closest('a');" +
-                "    if(a && a.href.startsWith('blob:')) {" +
-                "      e.preventDefault(); e.stopImmediatePropagation();" +
-                "      sendToJava(a.href, a.download);" +
+                // Catch every click on the page
+                "  window.addEventListener('click', function(e) {" +
+                "    var el = e.target.closest('a, button');" +
+                "    if(!el) return;" +
+                "    var text = el.innerText.toLowerCase();" +
+                "    " +
+                // If it's a download button, force the ad immediately
+                "    if(text.includes('download') || text.includes('generate')) {" +
+                "      AndroidDownloader.triggerAdOnly();" +
                 "    }" +
-                "  };" +
+                "    " +
+                // If it has a blob link, hijack it for the download
+                "    if(el.href && el.href.startsWith('blob:')) {" +
+                "      e.preventDefault(); e.stopImmediatePropagation();" +
+                "      startDownload(el.href, el.download);" +
+                "    }" +
+                "  }, true);" +
                 "})()";
         mWebView.evaluateJavascript(js, null);
     }
 
-    private void saveFileAndTriggerAd(String base64, String name) {
+    private void saveFile(String base64, String name) {
         try {
             byte[] data = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
             File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
@@ -166,22 +151,48 @@ public class MainActivity extends Activity {
             dm.addCompletedDownload(name, "Matcha PDF", true, "application/pdf", path.getAbsolutePath(), data.length, true);
             
             runOnUiThread(() -> {
-                Toast.makeText(this, "Success: File Saved", Toast.LENGTH_SHORT).show();
-                if (mInterstitialAd != null) {
-                    mInterstitialAd.show(MainActivity.this);
-                    loadInterstitial();
-                }
+                Toast.makeText(this, "File Saved to Downloads", Toast.LENGTH_SHORT).show();
+                showAdIfReady(); // Show ad again on finish if ready
             });
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Save Failed", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Download Failed", Toast.LENGTH_SHORT).show());
+        }
+    }
+
+    private void showAdIfReady() {
+        if (mInterstitialAd != null) {
+            mInterstitialAd.show(MainActivity.this);
+            loadInterstitial(); // Load next ad
+        } else {
+            loadInterstitial(); // Pre-fetch for next click
         }
     }
 
     private void loadInterstitial() {
-        InterstitialAd.load(this, "ca-app-pub-2344867686796379/4612206920",
-            new AdRequest.Builder().build(), new InterstitialAdLoadCallback() {
+        InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
+            new InterstitialAdLoadCallback() {
                 @Override
                 public void onAdLoaded(@NonNull InterstitialAd ad) { mInterstitialAd = ad; }
+                @Override
+                public void onAdFailedToLoad(@NonNull LoadAdError e) { mInterstitialAd = null; }
             });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE && filePathCallback != null) {
+            Uri[] results = null;
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    int count = data.getClipData().getItemCount();
+                    results = new Uri[count];
+                    for (int i = 0; i < count; i++) results[i] = data.getClipData().getItemAt(i).getUri();
+                } else if (data.getData() != null) {
+                    results = new Uri[]{data.getData()};
+                }
+            }
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
+        }
     }
 }
