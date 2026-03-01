@@ -41,7 +41,6 @@ public class MainActivity extends Activity {
     
     private InterstitialAd mInterstitialAd;
     private final String INTERSTITIAL_ID = "ca-app-pub-2344867686796379/4612206920";
-    private boolean isFirstLoad = true;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -51,31 +50,33 @@ public class MainActivity extends Activity {
 
         MobileAds.initialize(this, initializationStatus -> {});
         
-        // Banner ad remains as requested
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // ✅ FLOW 1: Load and show ad immediately on Open
+        // FLOW 1: Load and show ad immediately on Open
         loadAndShowAppOpenAd();
 
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
         WebSettings settings = mWebView.getSettings();
+        
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setUserAgentString(settings.setUserAgentString() + " MatchaApp");
+        
+        // ✅ FIXED: Simplified UserAgent string to prevent the "no arguments" error
+        String defaultUA = settings.getUserAgentString();
+        settings.setUserAgentString(defaultUA + " DailyHubKE_App");
 
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void downloadBlob(String base64, String name) {
-                saveFile(base64, name != null ? name : "Document.pdf");
+                saveFile(base64, name != null ? name : "DailyHub_Doc.pdf");
             }
             
             @JavascriptInterface
             public void triggerDownloadAd() {
-                // This is called when user clicks download/generate
                 runOnUiThread(() -> showInterstitialNow());
             }
         }, "AndroidDownloader");
@@ -120,9 +121,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void onAdLoaded(@NonNull InterstitialAd ad) {
                     mInterstitialAd = ad;
-                    // Show immediately because this is the 'App Open' ad
                     mInterstitialAd.show(MainActivity.this);
-                    // Pre-load the next one for the 'Download' click
                     loadInterstitialOnly(); 
                 }
                 @Override
@@ -143,7 +142,7 @@ public class MainActivity extends Activity {
     private void showInterstitialNow() {
         if (mInterstitialAd != null) {
             mInterstitialAd.show(MainActivity.this);
-            loadInterstitialOnly(); // Pre-load for next download
+            loadInterstitialOnly();
         }
     }
 
@@ -153,7 +152,7 @@ public class MainActivity extends Activity {
                 "    fetch(url).then(r => r.blob()).then(blob => {" +
                 "      var reader = new FileReader();" +
                 "      reader.onloadend = function() {" +
-                "        AndroidDownloader.downloadBlob(reader.result.split(',')[1], name || 'Document.pdf');" +
+                "        AndroidDownloader.downloadBlob(reader.result.split(',')[1], name || 'DailyHub_Doc.pdf');" +
                 "      };" +
                 "      reader.readAsDataURL(blob);" +
                 "    });" +
@@ -163,14 +162,14 @@ public class MainActivity extends Activity {
                 "    if(!el) return;" +
                 "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
                 "    " +
-                "    // ✅ FLOW 2: Show ad on Download click" +
+                "    // FLOW 2: Show ad on Download/Generate click" +
                 "    if(text.includes('download') || text.includes('generate')) {" +
                 "      AndroidDownloader.triggerDownloadAd();" +
                 "    }" +
                 "    " +
                 "    if(el.href && el.href.startsWith('blob:')) {" +
                 "      e.preventDefault(); e.stopImmediatePropagation();" +
-                "      startDownload(el.href, el.download || 'Document.pdf');" +
+                "      startDownload(el.href, el.download || 'DailyHub_Doc.pdf');" +
                 "    }" +
                 "  }, true);" +
                 "})()";
@@ -183,10 +182,10 @@ public class MainActivity extends Activity {
             File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
             try (OutputStream os = new FileOutputStream(path)) { os.write(data); }
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            dm.addCompletedDownload(name, "Matcha PDF", true, "application/pdf", path.getAbsolutePath(), data.length, true);
-            runOnUiThread(() -> Toast.makeText(this, "Success: File Saved", Toast.LENGTH_SHORT).show());
+            dm.addCompletedDownload(name, "DailyHub Document", true, "application/pdf", path.getAbsolutePath(), data.length, true);
+            runOnUiThread(() -> Toast.makeText(this, "File Downloaded Successfully", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Error saving file", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Download error", Toast.LENGTH_SHORT).show());
         }
     }
 
