@@ -49,19 +49,17 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize Ads
+        // 1. Initialize AdMob and Banner
         MobileAds.initialize(this, initializationStatus -> {});
-        
-        // Load Banner (Visible at the Top)
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) {
             mBannerAd.loadAd(new AdRequest.Builder().build());
         }
 
-        // APP OPEN FLOW: Show ad immediately on launch
+        // 2. Load App Open Ad
         loadAndShowAppOpenAd();
 
-        // 2. Setup WebView
+        // 3. WebView Configuration
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
         WebSettings settings = mWebView.getSettings();
@@ -70,11 +68,11 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         
-        // Identify as DailyHub KE
-        String defaultUA = settings.getUserAgentString();
-        settings.setUserAgentString(defaultUA + " DailyHubKE_App");
+        // Use DailyHub KE identity
+        String currentUA = settings.getUserAgentString();
+        settings.setUserAgentString(currentUA + " DailyHubKE_App");
 
-        // 3. The Bridge (For Ad Triggers and Blob Downloads)
+        // 4. JavaScript Bridge for Downloads
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void downloadBlob(String base64, String name) {
@@ -87,19 +85,26 @@ public class MainActivity extends Activity {
             }
         }, "AndroidDownloader");
 
+        // 5. Standard Download Listener
+        mWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+            runOnUiThread(() -> showInterstitialNow());
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setData(Uri.parse(url));
+            startActivity(i);
+        });
+
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                // Block monetization redirects to keep user in app
+                // Block Monetag ad redirects
                 if (url.contains("monetag") || url.contains("amskiploomr")) return true;
                 return false;
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                // ✅ This is the Listener you requested
-                injectGlobalListener();
+                injectGlobalListener(); // Re-inject on every page load
             }
         });
 
@@ -114,9 +119,8 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
-                // ✅ Fixes the "No PDF header" error by allowing multiple files
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); 
-                startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Support for Merge PDF tool
+                startActivityForResult(Intent.createChooser(intent, "Select PDF Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
         });
@@ -131,14 +135,14 @@ public class MainActivity extends Activity {
                 public void onAdLoaded(@NonNull InterstitialAd ad) {
                     mInterstitialAd = ad;
                     mInterstitialAd.show(MainActivity.this);
-                    loadInterstitialOnly(); // Pre-load next for download trigger
+                    loadNextInterstitial(); 
                 }
                 @Override
-                public void onAdFailedToLoad(@NonNull LoadAdError e) { loadInterstitialOnly(); }
+                public void onAdFailedToLoad(@NonNull LoadAdError e) { loadNextInterstitial(); }
             });
     }
 
-    private void loadInterstitialOnly() {
+    private void loadNextInterstitial() {
         InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
             new InterstitialAdLoadCallback() {
                 @Override
@@ -149,15 +153,15 @@ public class MainActivity extends Activity {
     private void showInterstitialNow() {
         if (mInterstitialAd != null) {
             mInterstitialAd.show(MainActivity.this);
-            loadInterstitialOnly(); // Keep one ready for next time
+            loadNextInterstitial();
         }
     }
 
     private void injectGlobalListener() {
-        // This script watches every click. If it's a download button, it triggers the ad.
-        // If it's a blob link (CV/Invoice), it converts it to data and sends it to Java.
+        // This script intercepts clicks on "Download" or "Generate" buttons
+        // It specifically handles "Blob" URLs used by modern PDF generators
         String js = "javascript:(function() {" +
-                "  function startDownload(url, name) {" +
+                "  function processBlob(url, name) {" +
                 "    fetch(url).then(r => r.blob()).then(blob => {" +
                 "      var reader = new FileReader();" +
                 "      reader.onloadend = function() {" +
@@ -167,19 +171,17 @@ public class MainActivity extends Activity {
                 "    });" +
                 "  }" +
                 "  window.addEventListener('click', function(e) {" +
-                "    var el = e.target.closest('a, button');" +
-                "    if(!el) return;" +
-                "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
+                "    var target = e.target.closest('a, button');" +
+                "    if(!target) return;" +
+                "    var text = target.innerText ? target.innerText.toLowerCase() : '';" +
                 "    " +
-                "    // 1. Trigger Ad on ANY download-related click" +
                 "    if(text.includes('download') || text.includes('generate')) {" +
                 "      AndroidDownloader.triggerDownloadAd();" +
                 "    }" +
                 "    " +
-                "    // 2. Handle Blob URLs for tools that don't use standard links" +
-                "    if(el.href && el.href.startsWith('blob:')) {" +
+                "    if(target.href && target.href.startsWith('blob:')) {" +
                 "      e.preventDefault(); e.stopImmediatePropagation();" +
-                "      startDownload(el.href, el.download || 'DailyHub_Doc.pdf');" +
+                "      processBlob(target.href, target.download || 'DailyHub_Doc.pdf');" +
                 "    }" +
                 "  }, true);" +
                 "})()";
@@ -194,11 +196,13 @@ public class MainActivity extends Activity {
                 os.write(data); 
                 os.flush();
             }
+            
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             dm.addCompletedDownload(name, "DailyHub Download", true, "application/pdf", path.getAbsolutePath(), data.length, true);
-            runOnUiThread(() -> Toast.makeText(this, "Success: File Saved to Downloads", Toast.LENGTH_SHORT).show());
+            
+            runOnUiThread(() -> Toast.makeText(this, "File Downloaded Successfully", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Save Failed", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Download failed", Toast.LENGTH_SHORT).show());
         }
     }
 
@@ -207,7 +211,6 @@ public class MainActivity extends Activity {
         if (requestCode == FILE_CHOOSER_REQUEST_CODE && filePathCallback != null) {
             Uri[] results = null;
             if (resultCode == RESULT_OK && data != null) {
-                // Multi-file support for Merge PDF
                 if (data.getClipData() != null) {
                     int count = data.getClipData().getItemCount();
                     results = new Uri[count];
