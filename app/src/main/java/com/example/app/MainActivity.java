@@ -41,6 +41,7 @@ public class MainActivity extends Activity {
     
     private InterstitialAd mInterstitialAd;
     private final String INTERSTITIAL_ID = "ca-app-pub-2344867686796379/4612206920";
+    private boolean isFirstLoad = true;
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -48,13 +49,15 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize AdMob & Banner
         MobileAds.initialize(this, initializationStatus -> {});
+        
+        // Banner ad remains as requested
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
-        loadInterstitial();
 
-        // 2. Setup WebView
+        // ✅ FLOW 1: Load and show ad immediately on Open
+        loadAndShowAppOpenAd();
+
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
         WebSettings settings = mWebView.getSettings();
@@ -64,16 +67,16 @@ public class MainActivity extends Activity {
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         settings.setUserAgentString(settings.setUserAgentString() + " MatchaApp");
 
-        // 3. JS Bridge (The Bridge between Web Click and Android Ad/Download)
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void downloadBlob(String base64, String name) {
-                saveFile(base64, name);
+                saveFile(base64, name != null ? name : "Document.pdf");
             }
-
+            
             @JavascriptInterface
-            public void triggerAdOnly() {
-                runOnUiThread(() -> showAdIfReady());
+            public void triggerDownloadAd() {
+                // This is called when user clicks download/generate
+                runOnUiThread(() -> showInterstitialNow());
             }
         }, "AndroidDownloader");
 
@@ -81,7 +84,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                if (url.contains("monetag") || url.contains("amskiploomr")) return true; // Block ad hijacks
+                if (url.contains("monetag") || url.contains("amskiploomr")) return true;
                 return false;
             }
 
@@ -102,7 +105,7 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Fix for Merge PDF
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
@@ -111,30 +114,63 @@ public class MainActivity extends Activity {
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
+    private void loadAndShowAppOpenAd() {
+        InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
+            new InterstitialAdLoadCallback() {
+                @Override
+                public void onAdLoaded(@NonNull InterstitialAd ad) {
+                    mInterstitialAd = ad;
+                    // Show immediately because this is the 'App Open' ad
+                    mInterstitialAd.show(MainActivity.this);
+                    // Pre-load the next one for the 'Download' click
+                    loadInterstitialOnly(); 
+                }
+                @Override
+                public void onAdFailedToLoad(@NonNull LoadAdError e) {
+                    loadInterstitialOnly();
+                }
+            });
+    }
+
+    private void loadInterstitialOnly() {
+        InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
+            new InterstitialAdLoadCallback() {
+                @Override
+                public void onAdLoaded(@NonNull InterstitialAd ad) { mInterstitialAd = ad; }
+            });
+    }
+
+    private void showInterstitialNow() {
+        if (mInterstitialAd != null) {
+            mInterstitialAd.show(MainActivity.this);
+            loadInterstitialOnly(); // Pre-load for next download
+        }
+    }
+
     private void injectGlobalListener() {
         String js = "javascript:(function() {" +
                 "  function startDownload(url, name) {" +
                 "    fetch(url).then(r => r.blob()).then(blob => {" +
                 "      var reader = new FileReader();" +
-                "      reader.onloadend = function() { AndroidDownloader.downloadBlob(reader.result.split(',')[1], name); };" +
+                "      reader.onloadend = function() {" +
+                "        AndroidDownloader.downloadBlob(reader.result.split(',')[1], name || 'Document.pdf');" +
+                "      };" +
                 "      reader.readAsDataURL(blob);" +
                 "    });" +
                 "  }" +
-                // Catch every click on the page
                 "  window.addEventListener('click', function(e) {" +
                 "    var el = e.target.closest('a, button');" +
                 "    if(!el) return;" +
-                "    var text = el.innerText.toLowerCase();" +
+                "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
                 "    " +
-                // If it's a download button, force the ad immediately
+                "    // ✅ FLOW 2: Show ad on Download click" +
                 "    if(text.includes('download') || text.includes('generate')) {" +
-                "      AndroidDownloader.triggerAdOnly();" +
+                "      AndroidDownloader.triggerDownloadAd();" +
                 "    }" +
                 "    " +
-                // If it has a blob link, hijack it for the download
                 "    if(el.href && el.href.startsWith('blob:')) {" +
                 "      e.preventDefault(); e.stopImmediatePropagation();" +
-                "      startDownload(el.href, el.download);" +
+                "      startDownload(el.href, el.download || 'Document.pdf');" +
                 "    }" +
                 "  }, true);" +
                 "})()";
@@ -146,36 +182,12 @@ public class MainActivity extends Activity {
             byte[] data = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
             File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
             try (OutputStream os = new FileOutputStream(path)) { os.write(data); }
-            
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             dm.addCompletedDownload(name, "Matcha PDF", true, "application/pdf", path.getAbsolutePath(), data.length, true);
-            
-            runOnUiThread(() -> {
-                Toast.makeText(this, "File Saved to Downloads", Toast.LENGTH_SHORT).show();
-                showAdIfReady(); // Show ad again on finish if ready
-            });
+            runOnUiThread(() -> Toast.makeText(this, "Success: File Saved", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Download Failed", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Error saving file", Toast.LENGTH_SHORT).show());
         }
-    }
-
-    private void showAdIfReady() {
-        if (mInterstitialAd != null) {
-            mInterstitialAd.show(MainActivity.this);
-            loadInterstitial(); // Load next ad
-        } else {
-            loadInterstitial(); // Pre-fetch for next click
-        }
-    }
-
-    private void loadInterstitial() {
-        InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
-            new InterstitialAdLoadCallback() {
-                @Override
-                public void onAdLoaded(@NonNull InterstitialAd ad) { mInterstitialAd = ad; }
-                @Override
-                public void onAdFailedToLoad(@NonNull LoadAdError e) { mInterstitialAd = null; }
-            });
     }
 
     @Override
