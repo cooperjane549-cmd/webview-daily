@@ -49,17 +49,15 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize AdMob and Banner
         MobileAds.initialize(this, initializationStatus -> {});
+        
+        // Banner Ad (Persistent at top/bottom)
         AdView mBannerAd = findViewById(R.id.adView);
-        if (mBannerAd != null) {
-            mBannerAd.loadAd(new AdRequest.Builder().build());
-        }
+        if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // 2. Load App Open Ad
+        // SHOW AD ON OPEN
         loadAndShowAppOpenAd();
 
-        // 3. WebView Configuration
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
         WebSettings settings = mWebView.getSettings();
@@ -68,15 +66,15 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         
-        // Use DailyHub KE identity
-        String currentUA = settings.getUserAgentString();
-        settings.setUserAgentString(currentUA + " DailyHubKE_App");
+        String defaultUA = settings.getUserAgentString();
+        settings.setUserAgentString(defaultUA + " DailyHubKE_App");
 
-        // 4. JavaScript Bridge for Downloads
+        // THE BRIDGE
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void downloadBlob(String base64, String name) {
-                saveFile(base64, name != null ? name : "DailyHub_Doc.pdf");
+                // Moving to background thread immediately to stop the crash
+                new Thread(() -> saveFile(base64, name != null ? name : "DailyHub_Doc.pdf")).start();
             }
             
             @JavascriptInterface
@@ -85,26 +83,17 @@ public class MainActivity extends Activity {
             }
         }, "AndroidDownloader");
 
-        // 5. Standard Download Listener
-        mWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
-            runOnUiThread(() -> showInterstitialNow());
-            Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setData(Uri.parse(url));
-            startActivity(i);
-        });
-
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                // Block Monetag ad redirects
                 if (url.contains("monetag") || url.contains("amskiploomr")) return true;
                 return false;
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectGlobalListener(); // Re-inject on every page load
+                injectGlobalListener();
             }
         });
 
@@ -119,8 +108,8 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Support for Merge PDF tool
-                startActivityForResult(Intent.createChooser(intent, "Select PDF Files"), FILE_CHOOSER_REQUEST_CODE);
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Important for Merge tools
+                startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
         });
@@ -135,14 +124,14 @@ public class MainActivity extends Activity {
                 public void onAdLoaded(@NonNull InterstitialAd ad) {
                     mInterstitialAd = ad;
                     mInterstitialAd.show(MainActivity.this);
-                    loadNextInterstitial(); 
+                    loadInterstitialOnly(); 
                 }
                 @Override
-                public void onAdFailedToLoad(@NonNull LoadAdError e) { loadNextInterstitial(); }
+                public void onAdFailedToLoad(@NonNull LoadAdError e) { loadInterstitialOnly(); }
             });
     }
 
-    private void loadNextInterstitial() {
+    private void loadInterstitialOnly() {
         InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
             new InterstitialAdLoadCallback() {
                 @Override
@@ -153,15 +142,13 @@ public class MainActivity extends Activity {
     private void showInterstitialNow() {
         if (mInterstitialAd != null) {
             mInterstitialAd.show(MainActivity.this);
-            loadNextInterstitial();
+            loadInterstitialOnly();
         }
     }
 
     private void injectGlobalListener() {
-        // This script intercepts clicks on "Download" or "Generate" buttons
-        // It specifically handles "Blob" URLs used by modern PDF generators
         String js = "javascript:(function() {" +
-                "  function processBlob(url, name) {" +
+                "  function startDownload(url, name) {" +
                 "    fetch(url).then(r => r.blob()).then(blob => {" +
                 "      var reader = new FileReader();" +
                 "      reader.onloadend = function() {" +
@@ -171,17 +158,17 @@ public class MainActivity extends Activity {
                 "    });" +
                 "  }" +
                 "  window.addEventListener('click', function(e) {" +
-                "    var target = e.target.closest('a, button');" +
-                "    if(!target) return;" +
-                "    var text = target.innerText ? target.innerText.toLowerCase() : '';" +
+                "    var el = e.target.closest('a, button');" +
+                "    if(!el) return;" +
+                "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
                 "    " +
                 "    if(text.includes('download') || text.includes('generate')) {" +
                 "      AndroidDownloader.triggerDownloadAd();" +
                 "    }" +
                 "    " +
-                "    if(target.href && target.href.startsWith('blob:')) {" +
+                "    if(el.href && el.href.startsWith('blob:')) {" +
                 "      e.preventDefault(); e.stopImmediatePropagation();" +
-                "      processBlob(target.href, target.download || 'DailyHub_Doc.pdf');" +
+                "      startDownload(el.href, el.download || 'DailyHub_Doc.pdf');" +
                 "    }" +
                 "  }, true);" +
                 "})()";
@@ -202,7 +189,7 @@ public class MainActivity extends Activity {
             
             runOnUiThread(() -> Toast.makeText(this, "File Downloaded Successfully", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Download failed", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Download error", Toast.LENGTH_SHORT).show());
         }
     }
 
@@ -223,4 +210,5 @@ public class MainActivity extends Activity {
             filePathCallback = null;
         }
     }
-}
+                    }
+                    
