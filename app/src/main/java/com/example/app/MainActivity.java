@@ -51,7 +51,6 @@ public class MainActivity extends Activity {
 
         MobileAds.initialize(this, initializationStatus -> {});
         
-        // Banner Ad (Persistent at top/bottom)
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
 
@@ -69,11 +68,11 @@ public class MainActivity extends Activity {
         String defaultUA = settings.getUserAgentString();
         settings.setUserAgentString(defaultUA + " DailyHubKE_App");
 
-        // THE BRIDGE
+        // ✅ THE BRIDGE: Handles both Ad Triggers and the Blob Data
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
             public void downloadBlob(String base64, String name) {
-                // Moving to background thread immediately to stop the crash
+                // Run on background thread to prevent the "few seconds" freeze/crash
                 new Thread(() -> saveFile(base64, name != null ? name : "DailyHub_Doc.pdf")).start();
             }
             
@@ -93,7 +92,8 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectGlobalListener();
+                // ✅ INJECT THE STREAM CATCHER
+                injectStreamCatcher();
             }
         });
 
@@ -108,7 +108,7 @@ public class MainActivity extends Activity {
             public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Important for Merge tools
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); 
                 startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
@@ -146,13 +146,14 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void injectGlobalListener() {
+    private void injectStreamCatcher() {
+        // This script intercepts the 'Blob' download and forces it into the Java Bridge
         String js = "javascript:(function() {" +
-                "  function startDownload(url, name) {" +
+                "  function process(url, name) {" +
                 "    fetch(url).then(r => r.blob()).then(blob => {" +
                 "      var reader = new FileReader();" +
                 "      reader.onloadend = function() {" +
-                "        AndroidDownloader.downloadBlob(reader.result.split(',')[1], name || 'DailyHub_Doc.pdf');" +
+                "        AndroidDownloader.downloadBlob(reader.result.split(',')[1], name);" +
                 "      };" +
                 "      reader.readAsDataURL(blob);" +
                 "    });" +
@@ -167,8 +168,8 @@ public class MainActivity extends Activity {
                 "    }" +
                 "    " +
                 "    if(el.href && el.href.startsWith('blob:')) {" +
-                "      e.preventDefault(); e.stopImmediatePropagation();" +
-                "      startDownload(el.href, el.download || 'DailyHub_Doc.pdf');" +
+                "      e.preventDefault();" +
+                "      process(el.href, el.download || 'Document.pdf');" +
                 "    }" +
                 "  }, true);" +
                 "})()";
@@ -187,7 +188,7 @@ public class MainActivity extends Activity {
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             dm.addCompletedDownload(name, "DailyHub Download", true, "application/pdf", path.getAbsolutePath(), data.length, true);
             
-            runOnUiThread(() -> Toast.makeText(this, "File Downloaded Successfully", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Success: Saved to Downloads", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
             runOnUiThread(() -> Toast.makeText(this, "Download error", Toast.LENGTH_SHORT).show());
         }
@@ -210,5 +211,4 @@ public class MainActivity extends Activity {
             filePathCallback = null;
         }
     }
-                    }
-                    
+}
