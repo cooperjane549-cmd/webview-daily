@@ -8,7 +8,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.util.Base64;
-import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -50,15 +49,13 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. ADS: Initialize and Banner
+        // 1. Initialize Ads
         MobileAds.initialize(this, initializationStatus -> {});
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
+        loadInterstitial(true); // Load and show on start for revenue
 
-        // SHOW AD ON OPEN
-        loadInterstitial(true);
-
-        // 2. WEBVIEW SETUP
+        // 2. Setup WebView
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
         WebSettings settings = mWebView.getSettings();
@@ -68,20 +65,23 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         
-        // Brand the User Agent for DailyHub KE
+        // Identify as DailyHub KE
         settings.setUserAgentString(settings.getUserAgentString() + " DailyHubKE_App");
 
-        // 3. THE BRIDGE: For CV Maker / Invoice Blobs
+        // 3. The Bridge (Catches Ads and Hidden Downloads)
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
-            public void downloadFile(String base64, String name) {
-                // Show Ad on UI Thread, Save on Background Thread
+            public void downloadBlob(String base64, String name) {
+                // Background thread to prevent the "Few seconds freeze"
+                new Thread(() -> saveFile(base64, name != null ? name : "DailyHub_Doc.pdf")).start();
+            }
+            @JavascriptInterface
+            public void triggerAd() {
                 runOnUiThread(() -> showInterstitialIfReady());
-                new Thread(() -> saveDailyHubFile(base64, name)).start();
             }
         }, "DailyHubBridge");
 
-        // 4. DOWNLOAD LISTENER: For Merge/Scan tools
+        // 4. Standard Download Listener (For Merge PDF / Scan tools)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
             showInterstitialIfReady();
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
@@ -94,16 +94,21 @@ public class MainActivity extends Activity {
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectDailyHubScript();
+                injectSuperListener();
             }
         });
 
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
+            public void onProgressChanged(WebView v, int p) {
+                progressBar.setVisibility(p < 100 ? View.VISIBLE : View.GONE);
+                progressBar.setProgress(p);
+            }
+            @Override
             public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Important for Merge Tool
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Fixes Merge tool upload
                 startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
@@ -112,7 +117,7 @@ public class MainActivity extends Activity {
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
-    private void loadInterstitial(boolean showImmediately) {
+    private void loadInterstitial(boolean show) {
         InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
             new InterstitialAdLoadCallback() {
                 @Override
@@ -122,37 +127,35 @@ public class MainActivity extends Activity {
                         @Override
                         public void onAdDismissedFullScreenContent() {
                             mInterstitialAd = null;
-                            loadInterstitial(false); // Reload for business revenue
+                            loadInterstitial(false); // Reload for next click
                         }
                     });
-                    if (showImmediately) mInterstitialAd.show(MainActivity.this);
+                    if (show) mInterstitialAd.show(MainActivity.this);
                 }
             });
     }
 
     private void showInterstitialIfReady() {
-        if (mInterstitialAd != null) {
-            mInterstitialAd.show(this);
-        } else {
-            loadInterstitial(false);
-        }
+        if (mInterstitialAd != null) mInterstitialAd.show(this);
+        else loadInterstitial(false);
     }
 
-    private void injectDailyHubScript() {
-        // This script intercepts the 'Generate/Download' buttons.
-        // It converts Blobs (CVs) into data so the user never leaves the page.
+    private void injectSuperListener() {
+        // This script intercepts ANY click on a Download/Generate button
+        // and hijacks the file data before the browser loses it.
         String js = "javascript:(function() {" +
                 "  window.addEventListener('click', function(e) {" +
                 "    var el = e.target.closest('a, button');" +
                 "    if(!el) return;" +
                 "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
                 "    if(text.includes('download') || text.includes('generate')) {" +
+                "      DailyHubBridge.triggerAd();" +
                 "      if(el.href && el.href.startsWith('blob:')) {" +
                 "        e.preventDefault(); e.stopImmediatePropagation();" +
                 "        fetch(el.href).then(r => r.blob()).then(blob => {" +
                 "          var reader = new FileReader();" +
                 "          reader.onloadend = function() {" +
-                "            DailyHubBridge.downloadFile(reader.result.split(',')[1], el.download || 'DailyHub_Doc.pdf');" +
+                "            DailyHubBridge.downloadBlob(reader.result.split(',')[1], el.download || 'DailyHub_Doc.pdf');" +
                 "          };" +
                 "          reader.readAsDataURL(blob);" +
                 "        });" +
@@ -163,16 +166,16 @@ public class MainActivity extends Activity {
         mWebView.evaluateJavascript(js, null);
     }
 
-    private void saveDailyHubFile(String base64, String name) {
+    private void saveFile(String base64, String name) {
         try {
             byte[] data = Base64.decode(base64, Base64.DEFAULT);
             File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
             try (OutputStream os = new FileOutputStream(path)) { os.write(data); os.flush(); }
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            dm.addCompletedDownload(name, "DailyHub KE", true, "application/pdf", path.getAbsolutePath(), data.length, true);
-            runOnUiThread(() -> Toast.makeText(this, "File Saved to Downloads", Toast.LENGTH_SHORT).show());
+            dm.addCompletedDownload(name, "DailyHub Document", true, "application/pdf", path.getAbsolutePath(), data.length, true);
+            runOnUiThread(() -> Toast.makeText(this, "Success: Saved to Downloads", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Error Saving File", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Download error", Toast.LENGTH_SHORT).show());
         }
     }
 
