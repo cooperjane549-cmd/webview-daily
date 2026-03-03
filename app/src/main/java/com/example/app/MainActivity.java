@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.util.Base64;
+import android.view.View; // Fixed the "symbol: variable View" error
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -49,13 +50,17 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. Initialize Ads
+        // 1. ADS: Initialize and Persistent Banner
         MobileAds.initialize(this, initializationStatus -> {});
         AdView mBannerAd = findViewById(R.id.adView);
-        if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
-        loadInterstitial(true); // Load and show on start for revenue
+        if (mBannerAd != null) {
+            mBannerAd.loadAd(new AdRequest.Builder().build());
+        }
 
-        // 2. Setup WebView
+        // Show Ad on startup for immediate revenue
+        loadInterstitial(true);
+
+        // 2. WEBVIEW SETUP
         progressBar = findViewById(R.id.progressBar);
         mWebView = findViewById(R.id.activity_main_webview);
         WebSettings settings = mWebView.getSettings();
@@ -65,23 +70,20 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
         
-        // Identify as DailyHub KE
+        // Brand the app in the User Agent
         settings.setUserAgentString(settings.getUserAgentString() + " DailyHubKE_App");
 
-        // 3. The Bridge (Catches Ads and Hidden Downloads)
+        // 3. THE BRIDGE: For "Invisible" Blob files (CV Maker, Invoices)
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
-            public void downloadBlob(String base64, String name) {
-                // Background thread to prevent the "Few seconds freeze"
-                new Thread(() -> saveFile(base64, name != null ? name : "DailyHub_Doc.pdf")).start();
-            }
-            @JavascriptInterface
-            public void triggerAd() {
+            public void downloadFile(String base64, String name) {
+                // Show Ad on UI thread, process file on Background thread to prevent crashes
                 runOnUiThread(() -> showInterstitialIfReady());
+                new Thread(() -> saveDailyHubFile(base64, name)).start();
             }
         }, "DailyHubBridge");
 
-        // 4. Standard Download Listener (For Merge PDF / Scan tools)
+        // 4. DOWNLOAD LISTENER: For standard tools (Merge PDF, Scan to PDF)
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
             showInterstitialIfReady();
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
@@ -94,21 +96,24 @@ public class MainActivity extends Activity {
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectSuperListener();
+                // Inject the script that hijacks the 'Download' buttons to stay in-app
+                injectDailyHubScript();
             }
         });
 
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView v, int p) {
+                // Visibility fixed with android.view.View import
                 progressBar.setVisibility(p < 100 ? View.VISIBLE : View.GONE);
                 progressBar.setProgress(p);
             }
+
             @Override
             public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> f, FileChooserParams p) {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Fixes Merge tool upload
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); // Fixes Merge tool multi-upload
                 startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
@@ -117,7 +122,7 @@ public class MainActivity extends Activity {
         mWebView.loadUrl("https://dailyhubke.com");
     }
 
-    private void loadInterstitial(boolean show) {
+    private void loadInterstitial(boolean showImmediately) {
         InterstitialAd.load(this, INTERSTITIAL_ID, new AdRequest.Builder().build(),
             new InterstitialAdLoadCallback() {
                 @Override
@@ -127,35 +132,36 @@ public class MainActivity extends Activity {
                         @Override
                         public void onAdDismissedFullScreenContent() {
                             mInterstitialAd = null;
-                            loadInterstitial(false); // Reload for next click
+                            loadInterstitial(false); // Reload immediately for business loop
                         }
                     });
-                    if (show) mInterstitialAd.show(MainActivity.this);
+                    if (showImmediately) mInterstitialAd.show(MainActivity.this);
                 }
             });
     }
 
     private void showInterstitialIfReady() {
-        if (mInterstitialAd != null) mInterstitialAd.show(this);
-        else loadInterstitial(false);
+        if (mInterstitialAd != null) {
+            mInterstitialAd.show(this);
+        } else {
+            loadInterstitial(false);
+        }
     }
 
-    private void injectSuperListener() {
-        // This script intercepts ANY click on a Download/Generate button
-        // and hijacks the file data before the browser loses it.
+    private void injectDailyHubScript() {
+        // Intercepts clicks and forces Blobs through the Bridge without refreshing the page
         String js = "javascript:(function() {" +
                 "  window.addEventListener('click', function(e) {" +
                 "    var el = e.target.closest('a, button');" +
                 "    if(!el) return;" +
                 "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
                 "    if(text.includes('download') || text.includes('generate')) {" +
-                "      DailyHubBridge.triggerAd();" +
                 "      if(el.href && el.href.startsWith('blob:')) {" +
                 "        e.preventDefault(); e.stopImmediatePropagation();" +
                 "        fetch(el.href).then(r => r.blob()).then(blob => {" +
                 "          var reader = new FileReader();" +
                 "          reader.onloadend = function() {" +
-                "            DailyHubBridge.downloadBlob(reader.result.split(',')[1], el.download || 'DailyHub_Doc.pdf');" +
+                "            DailyHubBridge.downloadFile(reader.result.split(',')[1], el.download || 'DailyHub_Doc.pdf');" +
                 "          };" +
                 "          reader.readAsDataURL(blob);" +
                 "        });" +
@@ -166,14 +172,15 @@ public class MainActivity extends Activity {
         mWebView.evaluateJavascript(js, null);
     }
 
-    private void saveFile(String base64, String name) {
+    private void saveDailyHubFile(String base64, String name) {
         try {
             byte[] data = Base64.decode(base64, Base64.DEFAULT);
-            File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
+            File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name != null ? name : "DailyHub_Doc.pdf");
             try (OutputStream os = new FileOutputStream(path)) { os.write(data); os.flush(); }
+            
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            dm.addCompletedDownload(name, "DailyHub Document", true, "application/pdf", path.getAbsolutePath(), data.length, true);
-            runOnUiThread(() -> Toast.makeText(this, "Success: Saved to Downloads", Toast.LENGTH_SHORT).show());
+            dm.addCompletedDownload(name, "DailyHub KE", true, "application/pdf", path.getAbsolutePath(), data.length, true);
+            runOnUiThread(() -> Toast.makeText(this, "File Saved to Downloads", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
             runOnUiThread(() -> Toast.makeText(this, "Download error", Toast.LENGTH_SHORT).show());
         }
@@ -188,10 +195,19 @@ public class MainActivity extends Activity {
                     int count = data.getClipData().getItemCount();
                     results = new Uri[count];
                     for (int i = 0; i < count; i++) results[i] = data.getClipData().getItemAt(i).getUri();
-                } else if (data.getData() != null) results = new Uri[]{data.getData()};
+                } else if (data.getData() != null) {
+                    results = new Uri[]{data.getData()};
+                }
             }
             filePathCallback.onReceiveValue(results);
             filePathCallback = null;
         }
     }
-}
+
+    @Override
+    public void onBackPressed() {
+        if (mWebView.canGoBack()) mWebView.goBack();
+        else super.onBackPressed();
+    }
+    }
+                
