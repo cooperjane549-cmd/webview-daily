@@ -9,7 +9,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.util.Base64;
 import android.view.View;
-import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -51,12 +50,11 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 1. ADS INITIALIZATION
+        // 1. ADS: Initialize & Banner
         MobileAds.initialize(this, initializationStatus -> {});
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
 
-        // SHOW AD ON OPEN
         loadInterstitial(true);
 
         // 2. WEBVIEW SETUP
@@ -66,43 +64,36 @@ public class MainActivity extends Activity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(true);
+        settings.setDatabaseEnabled(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        
         settings.setUserAgentString(settings.getUserAgentString() + " DailyHubKE_App");
 
-        // 3. THE BRIDGE
+        // 3. THE BRIDGE (Crucial: Using Threads to prevent 5-second crash)
         mWebView.addJavascriptInterface(new Object() {
             @JavascriptInterface
-            public void downloadBlob(String base64, String name) {
-                new Thread(() -> saveFile(base64, name != null ? name : "DailyHub_Doc.pdf")).start();
-            }
-            @JavascriptInterface
-            public void triggerAd() {
+            public void downloadFile(String base64, String name) {
+                // Show Ad on UI thread
                 runOnUiThread(() -> showInterstitialIfReady());
+                
+                // SAVE ON BACKGROUND THREAD (This stops the crash)
+                new Thread(() -> saveDailyHubFile(base64, name)).start();
             }
-        }, "AndroidDownloader");
+        }, "DailyHubBridge");
 
-        // 4. FIX FOR STANDARD TOOLS (Merge, Scan, etc.)
-        mWebView.setDownloadListener(new DownloadListener() {
-            @Override
-            public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
-                showInterstitialIfReady();
-                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                request.setMimeType(mimetype);
-                request.allowScanningByMediaScanner();
-                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "DailyHub_File.pdf");
-                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-                dm.enqueue(request);
-                Toast.makeText(MainActivity.this, "Downloading File...", Toast.LENGTH_SHORT).show();
-            }
+        // 4. DOWNLOAD LISTENER (For Standard Tools)
+        mWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+            showInterstitialIfReady();
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "DailyHub_" + System.currentTimeMillis() + ".pdf");
+            ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).enqueue(request);
+            Toast.makeText(this, "Downloading...", Toast.LENGTH_SHORT).show();
         });
 
         mWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                injectHybridListener();
+                injectDailyHubScript();
             }
         });
 
@@ -117,7 +108,7 @@ public class MainActivity extends Activity {
                 filePathCallback = f;
                 Intent intent = p.createIntent();
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); 
-                startActivityForResult(Intent.createChooser(intent, "Select Files"), FILE_CHOOSER_REQUEST_CODE);
+                startActivityForResult(Intent.createChooser(intent, "Upload Files"), FILE_CHOOSER_REQUEST_CODE);
                 return true;
             }
         });
@@ -144,48 +135,43 @@ public class MainActivity extends Activity {
     }
 
     private void showInterstitialIfReady() {
-        if (mInterstitialAd != null) mInterstitialAd.show(MainActivity.this);
+        if (mInterstitialAd != null) mInterstitialAd.show(this);
         else loadInterstitial(false);
     }
 
-    private void injectHybridListener() {
-        // This script is "smart" - it only hijacks blobs. 
-        // Normal links are left for the DownloadListener to handle.
+    private void injectDailyHubScript() {
         String js = "javascript:(function() {" +
                 "  window.addEventListener('click', function(e) {" +
                 "    var el = e.target.closest('a, button');" +
                 "    if(!el) return;" +
                 "    var text = el.innerText ? el.innerText.toLowerCase() : '';" +
-                "    " +
                 "    if(text.includes('download') || text.includes('generate')) {" +
-                "      AndroidDownloader.triggerAd();" +
-                "    }" +
-                "    " +
-                "    if(el.href && el.href.startsWith('blob:')) {" +
-                "      e.preventDefault();" +
-                "      fetch(el.href).then(r => r.blob()).then(blob => {" +
-                "        var reader = new FileReader();" +
-                "        reader.onloadend = function() {" +
-                "          AndroidDownloader.downloadBlob(reader.result.split(',')[1], el.download || 'DailyHub_Doc.pdf');" +
-                "        };" +
-                "        reader.readAsAsDataURL(blob);" +
-                "      });" +
+                "      if(el.href && el.href.startsWith('blob:')) {" +
+                "        e.preventDefault(); e.stopImmediatePropagation();" +
+                "        fetch(el.href).then(r => r.blob()).then(blob => {" +
+                "          var reader = new FileReader();" +
+                "          reader.onloadend = function() {" +
+                "            DailyHubBridge.downloadFile(reader.result.split(',')[1], el.download || 'DailyHub_File.pdf');" +
+                "          };" +
+                "          reader.readAsDataURL(blob);" +
+                "        });" +
+                "      }" +
                 "    }" +
                 "  }, true);" +
                 "})()";
         mWebView.evaluateJavascript(js, null);
     }
 
-    private void saveFile(String base64, String name) {
+    private void saveDailyHubFile(String base64, String name) {
         try {
             byte[] data = Base64.decode(base64, Base64.DEFAULT);
-            File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name);
+            File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name != null ? name : "DailyHub_Doc.pdf");
             try (OutputStream os = new FileOutputStream(path)) { os.write(data); os.flush(); }
             DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
-            dm.addCompletedDownload(name, "DailyHub", true, "application/pdf", path.getAbsolutePath(), data.length, true);
-            runOnUiThread(() -> Toast.makeText(this, "Success: Saved to Downloads", Toast.LENGTH_SHORT).show());
+            dm.addCompletedDownload(name, "DailyHub Document", true, "application/pdf", path.getAbsolutePath(), data.length, true);
+            runOnUiThread(() -> Toast.makeText(this, "Success: File Saved", Toast.LENGTH_SHORT).show());
         } catch (Exception e) {
-            runOnUiThread(() -> Toast.makeText(this, "Save Failed", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Error Saving File", Toast.LENGTH_SHORT).show());
         }
     }
 
