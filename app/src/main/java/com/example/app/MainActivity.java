@@ -3,7 +3,6 @@ package com.example.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
-import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -11,6 +10,7 @@ import android.os.Environment;
 import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.URLUtil;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -29,6 +29,9 @@ public class MainActivity extends Activity {
 
     private WebView mWebView;
     private ProgressBar progressBar;
+    private ValueCallback<Uri[]> filePathCallback;
+    private static final int FILE_CHOOSER_REQUEST_CODE = 1;
+    
     private InterstitialAd mInterstitialAd;
     private final String INTERSTITIAL_ID = "ca-app-pub-2344867686796379/4612206920";
 
@@ -38,7 +41,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // ADS SETUP
+        // 1. ADS SETUP
         MobileAds.initialize(this, initializationStatus -> {});
         AdView mBannerAd = findViewById(R.id.adView);
         if (mBannerAd != null) mBannerAd.loadAd(new AdRequest.Builder().build());
@@ -52,53 +55,71 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
 
-        // THE FIX: The System Downloader
+        // 2. DOWNLOAD HANDLER
         mWebView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
-            // 1. Show Ad
             showInterstitial();
-
-            // 2. Handle Download via System
             try {
                 DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
                 request.setMimeType(mimetype);
                 String cookies = CookieManager.getInstance().getCookie(url);
                 request.addRequestHeader("cookie", cookies);
                 request.addRequestHeader("User-Agent", userAgent);
-                request.setDescription("Downloading file...");
                 request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype));
-                request.allowScanningByMediaScanner();
                 request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                 request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, contentDisposition, mimetype));
 
                 DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
                 dm.enqueue(request);
-                Toast.makeText(getApplicationContext(), "Downloading File...", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Downloading File...", Toast.LENGTH_SHORT).show();
             } catch (Exception e) {
-                // If the URL is a BLOB, we open it in the browser as a fallback
-                Intent i = new Intent(Intent.ACTION_VIEW);
-                i.setData(Uri.parse(url));
-                startActivity(i);
+                // Fallback to browser for blob links
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
             }
         });
 
-        mWebView.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                // No complex injection needed for standard tools
-            }
-        });
-
+        // 3. UPLOAD HANDLER (The missing feature)
         mWebView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView v, int p) {
                 progressBar.setVisibility(p < 100 ? View.VISIBLE : View.GONE);
                 progressBar.setProgress(p);
             }
+
+            // This opens the file/photo picker
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePath, FileChooserParams fileChooserParams) {
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                }
+                filePathCallback = filePath;
+
+                Intent intent = fileChooserParams.createIntent();
+                try {
+                    startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE);
+                } catch (Exception e) {
+                    filePathCallback = null;
+                    return false;
+                }
+                return true;
+            }
         });
 
+        mWebView.setWebViewClient(new WebViewClient());
         mWebView.loadUrl("https://dailyhubke.com");
+    }
+
+    // 4. HANDLING THE SELECTED PHOTO/FILE
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+            if (filePathCallback == null) return;
+            Uri[] results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
+        }
     }
 
     private void loadInterstitial() {
