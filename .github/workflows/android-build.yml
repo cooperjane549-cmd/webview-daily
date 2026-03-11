@@ -5,16 +5,14 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# ✅ MOVING THIS TO THE TOP LEVEL FIXES THE WARNING
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: Build Signed APK
     runs-on: ubuntu-latest
-
+    
+    # We place it here to ensure the Job Runner sees it immediately
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -22,6 +20,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          # This ensures we use the latest version of the action code
+          persist-credentials: false
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -48,4 +49,3 @@ jobs:
         with:
           name: DailyHubKE-release-apk
           path: app/build/outputs/apk/release/app-release.apk
-          
